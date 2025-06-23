@@ -133,37 +133,38 @@ def calculate_likelihood(observed_count, total_count, target_rate_value, is_prob
            (not is_probability_rate and target_rate_value == float('inf')): # 分母無限大=確率0
            return 1.0 # 観測0で解析値も0なら尤度高い
 
-    # target_rate_value が極端に小さい/大きい場合のNaN/inf回避
-    if not isinstance(target_rate_value, (int, float)) or target_rate_value <= 1e-10:
-        # if total_count > 0 and observed_count > 0: # 観測があるのに確率が0なら極めて低い
-        #     return 1e-10
-        # else:
-        #     return 1.0 # 観測がないか、確率0でも観測0なら中立
-        return 1.0 if observed_count == 0 else 1e-10 # 確率0なら観測0で尤度1、観測>0で尤度極小
+    # target_rate_value が無効な値の場合のハンドリング
+    if not isinstance(target_rate_value, (int, float)) or target_rate_value <= 1e-10: 
+        # ターゲットレートが0以下の場合、観測回数が0なら尤度1（その設定では起こりえないことが起こってない）、そうでなければ1e-5（起こりえないことが起こった）
+        return 1.0 if observed_count == 0 else 1e-5 
 
     if is_probability_rate: # %形式の確率の場合
         expected_value = total_count * target_rate_value
     else: # 1/X形式の分母の場合
         expected_value = total_count / target_rate_value
     
-    # expected_valueが0以下または非有限な値の場合のハンドリング
+    # 期待値 (lambda) が無効な値の場合のハンドリング
     if not np.isfinite(expected_value) or expected_value < 1e-10: 
-        return 1.0 if observed_count == 0 else 1e-10
+        return 1.0 if observed_count == 0 else 1e-5 
 
     # ポアソン分布のPMF (確率質量関数) を使用して尤度を計算
     # observed_countを整数に丸めることで、floatが原因のエラーを防ぐ
     observed_count_int = int(round(observed_count))
 
     try:
+        # ポアソン分布の期待値が大きすぎると計算負荷が高まるため、適切な範囲に制限
+        # また、observed_count_intがexpected_valueから極端に離れている場合は、直接小さい尤度を返す
+        if observed_count_int > 5 * expected_value and expected_value > 1: # 期待値の5倍以上観測されるのは稀
+             return 1e-10
+        if expected_value > 1000 and observed_count_int == 0: # 期待値が非常に高いのに0回観測
+             return 1e-10
+
         likelihood = poisson.pmf(observed_count_int, expected_value)
-    except ValueError: # scipy.stats.poisson.pmfが不正な入力でValueErrorを出す場合
-        # 例: observed_count_int が極端に大きい/小さい、または expected_value が特殊な値
+    except (ValueError, OverflowError, ZeroDivisionError): # poisson.pmfが不正な入力でValueErrorを出す場合
         return 1e-10 # エラーが発生した場合は非常に低い尤度を返す（その状況は統計的にありえない）
-    except OverflowError: # 数値が大きすぎて計算できない場合
-        return 1e-10
     
-    # 尤度がゼロになることを避けるため、非常に小さい値を下限とする
-    return max(likelihood, 1e-10)
+    # 尤度がゼロになることを避けるため、ある程度の値を下限とする
+    return max(likelihood, 1e-5) # <-- 尤度の下限を1e-5に設定
 
 
 # --------------------------------------------------------------------------------------
@@ -200,16 +201,16 @@ def apply_contextual_score(overall_likelihoods, context_inputs):
     # 4. ジャグラー系の取材は入っているか
     coverage_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0}
     if context_inputs.get('has_juggler_coverage_radio', '不明') == "はい":
-        coverage_factor = {1: 0.9, 2: 1.0, 3: 1.1, 4: 1.3, 5: 1.8, 6: 2.5} # 取材で高設定期待度UP
+        coverage_factor = {1: 0.9, 2: 1.0, 3: 1.1, 4: 1.3, 5: 1.8, 6: 2.5} 
     elif context_inputs.get('has_juggler_coverage_radio', '不明') == "いいえ":
-        coverage_factor = {1: 1.0, 2: 0.9, 3: 0.8, 4: 0.7, 5: 0.6, 6: 0.5} # 取材なしで高設定期待度DOWN
+        coverage_factor = {1: 1.0, 2: 0.9, 3: 0.8, 4: 0.7, 5: 0.6, 6: 0.5} 
 
     # 5. 店がジャグラーに設定6を過去に使っている可能性はあるか
     store_s6_history_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0}
     if context_inputs.get('store_s6_history_radio', '不明') == "はい":
-        store_s6_history_factor = {1: 0.8, 2: 0.9, 3: 1.0, 4: 1.2, 5: 1.5, 6: 3.0} # 設定6の可能性を強くする
+        store_s6_history_factor = {1: 0.8, 2: 0.9, 3: 1.0, 4: 1.2, 5: 1.5, 6: 3.0} 
     elif context_inputs.get('store_s6_history_radio', '不明') == "いいえ":
-        store_s6_history_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 0.8, 5: 0.5, 6: 0.1} # 設定6の可能性を大幅に下げる
+        store_s6_history_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 0.8, 5: 0.5, 6: 0.1} 
 
     # 全ての要因を掛け合わせて尤度を調整
     for setting in range(1, 7):
@@ -226,28 +227,22 @@ def apply_contextual_score(overall_likelihoods, context_inputs):
     return adjusted_likelihoods
 
 
-def predict_setting(game_type, data_inputs, context_inputs): # context_inputsを追加
-    overall_likelihoods = {setting: 1.0 for setting in range(1, 7)} # 各設定の総合尤度を1.0で初期化
+def predict_setting(game_type, data_inputs, context_inputs): 
+    overall_likelihoods = {setting: 1.0 for setting in range(1, 7)} 
 
-    # 選択された機種のデータ
     current_game_data = JUGGLER_GAME_DATA.get(game_type)
     if not current_game_data:
         return "選択された機種のデータが見つかりません。入力を見直してください。"
 
-    # データが一つも入力されていない場合のチェック
-    if data_inputs.get('total_game_count', 0) == 0: # 総ゲーム数のみで判断
+    if data_inputs.get('total_game_count', 0) == 0: 
         return "データが入力されていません。推測を行うには、少なくとも総ゲーム数を入力してください。"
 
-    total_game_count = data_inputs.get('total_game_count', 0) # 総ゲーム数
+    total_game_count = data_inputs.get('total_game_count', 0) 
+    at_first_hit_count = data_inputs.get('at_first_hit_count', 0) 
     
     # --- 確率系の要素の計算 ---
     
-    # BB, RB, ボーナス合算確率
-    # ボーナス総回数 (BIG+REG) が分母となるもの (単独BB/RB)
-    at_first_hit_count = data_inputs.get('at_first_hit_count', 0) # UIからのボーナス総回数
-    
     for bonus_type_key in ["BB確率", "RB確率", "ボーナス合算確率"]:
-        # UI入力キーを動的に取得
         ui_input_key = ""
         if bonus_type_key == "BB確率": ui_input_key = "bb_count"
         elif bonus_type_key == "RB確率": ui_input_key = "reg_count"
@@ -265,21 +260,21 @@ def predict_setting(game_type, data_inputs, context_inputs): # context_inputsを
             likelihood = calculate_likelihood(data_inputs['budou_count'], total_game_count, rate_val, is_probability_rate=False)
             overall_likelihoods[setting] *= likelihood
 
-    # 単独BB/RB確率 (ボーナス総回数を分母に)
+    # 単独BB/RB確率
     for bonus_type_key in ["単独BB確率", "単独RB確率"]:
         ui_input_key = ""
         if bonus_type_key == "単独BB確率": ui_input_key = "tandoku_bb_count"
         elif bonus_type_key == "単独RB確率": ui_input_key = "tandoku_rb_count"
 
         observed_count = data_inputs.get(ui_input_key, 0)
-        if at_first_hit_count > 0 and observed_count >= 0: # ボーナス総回数が分母
+        if at_first_hit_count > 0 and observed_count >= 0: 
              for setting, rate_val in current_game_data.get(bonus_type_key, {}).items(): 
                 likelihood = calculate_likelihood(observed_count, at_first_hit_count, rate_val, is_probability_rate=False)
                 overall_likelihoods[setting] *= likelihood
 
-    # チェリー重複BB/RB確率 (チェリー総回数を分母に)
+    # チェリー重複BB/RB確率
     cherry_total_count = data_inputs.get('cherry_count', 0)
-    if cherry_total_count > 0: # チェリー総回数を分母に
+    if cherry_total_count > 0: 
         for bonus_type_key in ["チェリー重複BB確率", "チェリー重複RB確率"]:
             ui_input_key = ""
             if bonus_type_key == "チェリー重複BB確率": ui_input_key = "cherry_choufuku_bb_count"
@@ -423,12 +418,12 @@ if result_button_clicked:
     }
 
     context_inputs = {
-        'is_event_day': is_event_day,
-        'juggler_expect_day': juggler_expect_day,
-        'is_tail_event': is_tail_event,
-        'is_my_tail_expected': is_my_tail_expected, 
-        'has_juggler_coverage': has_juggler_coverage,
-        'store_s6_history': store_s6_history,
+        'is_event_day_radio': is_event_day,
+        'juggler_expect_day_radio': juggler_expect_day,
+        'is_tail_event_radio': is_tail_event,
+        'is_my_tail_expected_radio': is_my_tail_expected, 
+        'has_juggler_coverage_radio': has_juggler_coverage,
+        'store_s6_history_radio': store_s6_history,
     }
     
     result_content = predict_setting(selected_game_type, user_inputs_for_prediction, context_inputs)

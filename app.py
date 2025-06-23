@@ -48,195 +48,11 @@ JUGGLER_GAME_DATA = {
     },
 }
 
-# --- カスタムCSS（ジャグラー版） ---
-CUSTOM_CSS = """
-<style>
-/* 全体背景画像 */
-body {
-    background-image: url("https://pachi-navi.info/img/img_gogo02.jpg"); /* GOGO!ランプ風画像 */
-    background-size: cover; /* 背景を画面いっぱいに広げる */
-    background-attachment: fixed; /* スクロールしても背景を固定 */
-    background-position: center center;
-    color: #333333; /* 全体テキスト色を暗いグレーに */
-}
-
-/* メインコンテンツの背景を少し透過させる (JUGGLERのランプ色合い) */
-[data-testid="stAppViewBlockContainer"] {
-    background-color: rgba(255, 255, 255, 0.9); /* ほぼ白で少し透明 */
-    padding: 20px;
-    border-radius: 15px; /* 角を丸く */
-    box-shadow: 0 0 20px rgba(0, 200, 0, 0.5); /* GOGOランプのような緑の光 */
-    margin: 20px auto; /* 中央寄せ */
-    max-width: 700px; /* 適度な幅に制限 */
-}
-
-/* タイトル */
-h1, h2, h3 {
-    color: #FF1493; /* ディープピンク */
-    text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.3);
-    font-family: 'Arial Black', Gadget, sans-serif; /* 太めのフォント */
-    text-align: center;
-}
-
-/* セクション区切りの破線 */
-hr {
-    border-top: 2px dashed #FFD700; /* ゴールドの破線 */
-}
-
-/* ナンバーインプット、セレクトボックスなどの入力フィールド */
-.stNumberInput > div > div > input, 
-.stSelectbox > div > div > button {
-    background-color: #F0F0F0; /* 明るいグレーの背景 */
-    color: #333333; /* 暗い文字 */
-    border: 2px solid #00AA00; /* 緑の枠線 */
-    border-radius: 8px; /* 角を丸く */
-    box-shadow: 0 0 8px rgba(0, 255, 0, 0.3); /* 緑の光る影 */
-    font-weight: bold;
-}
-
-/* ボタン */
-.stButton > button {
-    background-color: #00AA00; /* 緑色 */
-    color: white;
-    border: 2px solid #00FF00; /* 明るい緑の枠線 */
-    border-radius: 10px; /* 角を丸く */
-    box-shadow: 0 0 15px rgba(0, 255, 0, 0.5); /* GOGOランプのような緑の光る影 */
-    font-weight: bold;
-    padding: 10px 20px;
-    transition: all 0.3s ease; /* ホバー時のアニメーション */
-    display: block; /* ブロック要素にして中央寄せしやすく */
-    margin: 15px auto; /* 中央寄せ */
-}
-.stButton > button:hover {
-    background-color: #00FF00; /* ホバーで明るい緑 */
-    box-shadow: 0 0 20px rgba(0, 255, 0, 0.7), 0 0 30px rgba(0, 200, 0, 0.5);
-    transform: translateY(-2px);
-}
-
-/* st.infoのスタイル（ヒントボックス） */
-.stAlert {
-    background-color: rgba(255, 255, 0, 0.8); /* 黄色の半透明 */
-    color: #333333; /* 黒文字 */
-    border-left: 5px solid #FFA500; /* オレンジ色の線 */
-    border-radius: 8px;
-}
-</style>
-"""
-
-# --- 推測ロジック関数 ---
-def calculate_likelihood(observed_count, total_count, target_rate_value, is_probability_rate=True):
-    """
-    実測値と解析値から尤度を計算する。
-    target_rate_value: 1/X形式の場合のX、または%形式の小数。
-    is_probability_rate: Trueなら確率（%表示の小数）、Falseなら分母（1/XのX）
-    """
-    if total_count <= 0:
-        return 1.0
-    
-    if observed_count <= 0 and total_count > 0:
-        if (is_probability_rate and target_rate_value <= 1e-10) or \
-           (not is_probability_rate and target_rate_value == float('inf')):
-           return 1.0
-    
-    if is_probability_rate:
-        expected_value = total_count * target_rate_value
-    else:
-        if target_rate_value <= 1e-10:
-            return 1e-10
-        expected_value = total_count / target_rate_value
-    
-    if expected_value <= 1e-10:
-        return 1.0 if observed_count == 0 else 1e-10
-
-    likelihood = poisson.pmf(observed_count, expected_value)
-    
-    return max(likelihood, 1e-10)
-
-
-def predict_setting(game_type, data_inputs):
-    overall_likelihoods = {setting: 1.0 for setting in range(1, 7)} # 各設定の総合尤度を1.0で初期化
-
-    # 選択された機種のデータ
-    current_game_data = JUGGLER_GAME_DATA.get(game_type)
-    if not current_game_data:
-        return "選択された機種のデータが見つかりません。入力を見直してください。"
-
-    # データが一つも入力されていない場合のチェック
-    if data_inputs.get('total_game_count', 0) == 0: # 総ゲーム数のみで判断
-        return "データが入力されていません。推測を行うには、少なくとも総ゲーム数を入力してください。"
-
-    total_game_count = data_inputs.get('total_game_count', 0) # 総ゲーム数
-    
-    # --- 確率系の要素の計算 ---
-    
-    # ボーナス確率 (BB, RB, 合算)
-    for bonus_type in ["BB", "RB", "ボーナス合算"]:
-        observed_count = data_inputs.get(f"{bonus_type.lower().replace(' ', '')}_count", 0)
-        if total_game_count > 0 and observed_count >= 0:
-            for setting, rate_val in current_game_data[f"{bonus_type}確率"].items():
-                likelihood = calculate_likelihood(observed_count, total_game_count, rate_val, is_probability_rate=False)
-                overall_likelihoods[setting] *= likelihood
-
-    # ブドウ確率
-    if total_game_count > 0 and data_inputs.get('budou_count', 0) >= 0:
-        for setting, rate_val in current_game_data["ブドウ確率"].items():
-            likelihood = calculate_likelihood(data_inputs['budou_count'], total_game_count, rate_val, is_probability_rate=False)
-            overall_likelihoods[setting] *= likelihood
-
-    # 単独BB/RB確率
-    for bonus_type in ["単独BB", "単独RB"]:
-        observed_count = data_inputs.get(f"{bonus_type.lower().replace('確率', '').replace(' ', '')}_count", 0) # e.g., tan_doku_bb_count
-        if data_inputs.get('at_first_hit_count', 0) > 0 and observed_count >= 0: # ボーナス総回数を分母に
-             for setting, rate_val in current_game_data[f"{bonus_type}確率"].items():
-                # 単独ボーナスはボーナス総回数に対しての確率と仮定
-                likelihood = calculate_likelihood(observed_count, data_inputs['at_first_hit_count'], rate_val, is_probability_rate=False)
-                overall_likelihoods[setting] *= likelihood
-
-    # チェリー重複BB/RB確率
-    if data_inputs.get('cherry_count', 0) > 0: # チェリー総回数を分母に
-        for bonus_type in ["チェリー重複BB", "チェリー重複RB"]:
-            observed_count = data_inputs.get(f"{bonus_type.lower().replace('確率', '').replace(' ', '')}_count", 0) # e.g., cherry_choufuku_bb_count
-            if observed_count >= 0:
-                for setting, rate_val in current_game_data[f"{bonus_type}確率"].items():
-                    # チェリー重複ボーナスはチェリー総回数に対しての確率と仮定
-                    likelihood = calculate_likelihood(observed_count, data_inputs['cherry_count'], rate_val, is_probability_rate=False)
-                    overall_likelihoods[setting] *= likelihood
-    
-    # --- 最終結果の処理 ---
-    total_overall_likelihood_sum = sum(overall_likelihoods.values())
-    if total_overall_likelihood_sum == 0: 
-        return "データが不足しているか、矛盾しているため、推測が困難です。入力値を見直してください。"
-
-    normalized_probabilities = {s: (p / total_overall_likelihood_sum) * 100 for s, p in overall_likelihoods.items()}
-
-    predicted_setting = max(normalized_probabilities, key=normalized_probabilities.get)
-    max_prob_value = normalized_probabilities[predicted_setting]
-
-    result_str = f"## ✨ 推測される設定: 設定{predicted_setting} (確率: 約{max_prob_value:.2f}%) ✨\n\n"
-    result_str += "--- 各設定の推測確率 ---\n"
-    for setting, prob in sorted(normalized_probabilities.items(), key=lambda item: item[1], reverse=True):
-        result_str += f"  - 設定{setting}: 約{prob:.2f}%\n"
-    
-    return result_str
-
-
-# --- Streamlit UI 部分 ---
-
-st.set_page_config(
-    page_title="ジャグラー 設定判別ツール",
-    layout="centered",
-    initial_sidebar_state="collapsed", # サイドバーはデフォルトで閉じる
-    page_icon="🎰" 
-)
-
-# カスタムCSSの注入 (背景画像は削除し、UI要素のスタイリングのみ残す)
-# ユーザー要望により背景画像なし、カスタムカラーでシンプルに
+# --- カスタムCSS（ジャグラー版 - シンプルなデザイン） ---
 CUSTOM_CSS_JUGGLER = """
 <style>
-/* 全体背景色をデフォルトの白/黒に（Streamlitのテーマに依存）*/
-/* body { } */ 
-
-/* メインコンテンツの背景を少し目立つように */
+/* 全体背景色をStreamlitのテーマに依存させる（デフォルトの白/黒）*/
+/* メインコンテンツの背景色や影、角丸のみを設定 */
 [data-testid="stAppViewBlockContainer"] {
     background-color: #FFFFFF; /* 明るい背景色 */
     padding: 20px;
@@ -298,6 +114,194 @@ hr {
 }
 </style>
 """
+
+# --- 推測ロジック関数 ---
+def calculate_likelihood(observed_count, total_count, target_rate_value, is_probability_rate=True):
+    """
+    実測値と解析値から尤度を計算する。
+    target_rate_value: 1/X形式の場合のX、または%形式の小数。
+    is_probability_rate: Trueなら確率（%表示の小数）、Falseなら分母（1/XのX）
+    """
+    if total_count <= 0: # 試行回数がゼロ以下なら計算に影響を与えない
+        return 1.0
+    
+    # 観測回数もゼロなら影響を与えない（データがないのと同じ）
+    if observed_count <= 0 and total_count > 0:
+        # ただし、解析値が0%なのに観測値が0なら尤度が高い
+        if (is_probability_rate and target_rate_value <= 1e-10) or \
+           (not is_probability_rate and target_rate_value == float('inf')): # 分母無限大=確率0
+           return 1.0 # 観測0で解析値も0なら尤度高い
+
+    if is_probability_rate: # %形式の確率の場合
+        expected_value = total_count * target_rate_value
+    else: # 1/X形式の分母の場合
+        if target_rate_value <= 1e-10: # 分母が0はありえないが念のため
+            return 1e-10 # 確率無限大になるので極めて低い尤度
+        expected_value = total_count / target_rate_value
+    
+    # 期待値が0の場合
+    if expected_value <= 1e-10: # 非常に小さい値で0とみなす
+        return 1.0 if observed_count == 0 else 1e-10 # 期待値0で観測も0なら尤度1、観測1以上ならほぼ0
+
+    # ポアソン分布のPMF (確率質量関数) を使用して尤度を計算
+    likelihood = poisson.pmf(observed_count, expected_value)
+    
+    # 尤度がゼロになることを避けるため、非常に小さい値を下限とする
+    return max(likelihood, 1e-10)
+
+
+# --------------------------------------------------------------------------------------
+# Contextual Scoring (周辺状況スコアリング) ロジック
+# --------------------------------------------------------------------------------------
+def apply_contextual_score(overall_likelihoods, context_inputs):
+    """
+    周辺状況の入力に基づいて、各設定の尤度を調整する
+    """
+    adjusted_likelihoods = overall_likelihoods.copy() # 元の尤度をコピーして調整
+
+    # 1. 今日はイベント日か
+    event_day_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0}
+    if context_inputs['is_event_day'] == "はい":
+        event_day_factor = {1: 0.9, 2: 1.0, 3: 1.1, 4: 1.2, 5: 1.5, 6: 2.0} # 高設定ほど期待度UP
+    elif context_inputs['is_event_day'] == "いいえ":
+        event_day_factor = {1: 1.0, 2: 0.9, 3: 0.8, 4: 0.7, 5: 0.6, 6: 0.5} # 高設定ほど期待度DOWN
+    
+    # 2. 今日はジャグラーに設定が入っていることが期待できる日なのか
+    juggler_expect_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0}
+    if context_inputs['juggler_expect_day'] == "はい":
+        juggler_expect_factor = {1: 0.9, 2: 1.0, 3: 1.1, 4: 1.3, 5: 1.8, 6: 2.5} # さらに高設定期待度UP
+    elif context_inputs['juggler_expect_day'] == "いいえ":
+        juggler_expect_factor = {1: 1.0, 2: 0.9, 3: 0.8, 4: 0.7, 5: 0.6, 6: 0.4} # さらに高設定期待度DOWN
+
+    # 3. 末尾イベントなどやっているか & 自分の座っている末尾は期待できるか
+    tail_event_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0}
+    if context_inputs['is_tail_event'] == "はい" and context_inputs['is_my_tail_expected'] == "はい":
+        tail_event_factor = {1: 0.8, 2: 1.0, 3: 1.2, 4: 1.5, 5: 2.0, 6: 3.0} # 末尾合致で高設定に強い影響
+    elif context_inputs['is_tail_event'] == "はい" and context_inputs['is_my_tail_expected'] == "いいえ":
+        tail_event_factor = {1: 1.0, 2: 1.0, 3: 0.9, 4: 0.8, 5: 0.7, 6: 0.5} # 末尾不一致で高設定にペナルティ
+    
+    # 4. ジャグラー系の取材は入っているか
+    coverage_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0}
+    if context_inputs['has_juggler_coverage'] == "はい":
+        coverage_factor = {1: 0.9, 2: 1.0, 3: 1.1, 4: 1.3, 5: 1.8, 6: 2.5} # 取材で高設定期待度UP
+    elif context_inputs['has_juggler_coverage'] == "いいえ":
+        coverage_factor = {1: 1.0, 2: 0.9, 3: 0.8, 4: 0.7, 5: 0.6, 6: 0.5} # 取材なしで高設定期待度DOWN
+
+    # 5. 店がジャグラーに設定6を過去に使っている可能性はあるか
+    store_s6_history_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0, 6: 1.0}
+    if context_inputs['store_uses_s6_history'] == "はい":
+        store_s6_history_factor = {1: 0.8, 2: 0.9, 3: 1.0, 4: 1.2, 5: 1.5, 6: 3.0} # 設定6の可能性を強くする
+    elif context_inputs['store_uses_s6_history'] == "いいえ":
+        store_s6_history_factor = {1: 1.0, 2: 1.0, 3: 1.0, 4: 0.8, 5: 0.5, 6: 0.1} # 設定6の可能性を大幅に下げる
+
+    # 全ての要因を掛け合わせて尤度を調整
+    for setting in range(1, 7):
+        adjusted_likelihoods[setting] *= (
+            event_day_factor[setting] *
+            juggler_expect_factor[setting] *
+            tail_event_factor[setting] *
+            coverage_factor[setting] *
+            store_s6_history_factor[setting]
+        )
+        # 0になるのを防ぐ
+        adjusted_likelihoods[setting] = max(adjusted_likelihoods[setting], 1e-10)
+
+    return adjusted_likelihoods
+
+# --------------------------------------------------------------------------------------
+
+
+def predict_setting(game_type, data_inputs, context_inputs): # context_inputsを追加
+    overall_likelihoods = {setting: 1.0 for setting in range(1, 7)} # 各設定の総合尤度を1.0で初期化
+
+    # 選択された機種のデータ
+    current_game_data = JUGGLER_GAME_DATA.get(game_type)
+    if not current_game_data:
+        return "選択された機種のデータが見つかりません。入力を見直してください。"
+
+    # データが一つも入力されていない場合のチェック
+    if data_inputs.get('total_game_count', 0) == 0: # 総ゲーム数のみで判断
+        return "データが入力されていません。推測を行うには、少なくとも総ゲーム数を入力してください。"
+
+    total_game_count = data_inputs.get('total_game_count', 0) # 総ゲーム数
+    
+    # --- 確率系の要素の計算 ---
+    
+    # BB, RB, ボーナス合算確率
+    at_first_hit_count = data_inputs.get('at_first_hit_count', 0) # UIからのボーナス総回数
+    
+    for bonus_type_key, ui_input_key in {
+        "BB確率": "bb_count",
+        "RB確率": "reg_count",
+        "ボーナス合算確率": "at_first_hit_count" 
+    }.items():
+        observed_count = data_inputs.get(ui_input_key, 0)
+        if total_game_count > 0 and observed_count >= 0:
+            for setting, rate_val in current_game_data.get(bonus_type_key, {}).items(): 
+                likelihood = calculate_likelihood(observed_count, total_game_count, rate_val, is_probability_rate=False)
+                overall_likelihoods[setting] *= likelihood
+
+    # ブドウ確率
+    if total_game_count > 0 and data_inputs.get('budou_count', 0) >= 0:
+        for setting, rate_val in current_game_data.get("ブドウ確率", {}).items(): 
+            likelihood = calculate_likelihood(data_inputs['budou_count'], total_game_count, rate_val, is_probability_rate=False)
+            overall_likelihoods[setting] *= likelihood
+
+    # 単独BB/RB確率 (ボーナス総回数を分母に)
+    for bonus_type_key, ui_input_key in {
+        "単独BB確率": "tandoku_bb_count",
+        "単独RB確率": "tandoku_rb_count"
+    }.items():
+        observed_count = data_inputs.get(ui_input_key, 0)
+        if at_first_hit_count > 0 and observed_count >= 0: # ボーナス総回数が分母
+             for setting, rate_val in current_game_data.get(bonus_type_key, {}).items(): 
+                likelihood = calculate_likelihood(observed_count, at_first_hit_count, rate_val, is_probability_rate=False)
+                overall_likelihoods[setting] *= likelihood
+
+    # チェリー重複BB/RB確率 (チェリー総回数を分母に)
+    cherry_total_count = data_inputs.get('cherry_count', 0)
+    if cherry_total_count > 0: # チェリー総回数を分母に
+        for bonus_type_key, ui_input_key in {
+            "チェリー重複BB確率": "cherry_choufuku_bb_count",
+            "チェリー重複RB確率": "cherry_choufuku_rb_count"
+        }.items():
+            observed_count = data_inputs.get(ui_input_key, 0)
+            if observed_count >= 0:
+                for setting, rate_val in current_game_data.get(bonus_type_key, {}).items(): 
+                    likelihood = calculate_likelihood(observed_count, cherry_total_count, rate_val, is_probability_rate=False)
+                    overall_likelihoods[setting] *= likelihood
+    
+    # --- 周辺状況スコアリングを適用 ---
+    adjusted_likelihoods = apply_contextual_score(overall_likelihoods, context_inputs)
+
+    # --- 最終結果の処理 ---
+    total_overall_likelihood_sum = sum(adjusted_likelihoods.values())
+    if total_overall_likelihood_sum == 0: 
+        return "データが不足しているか、矛盾しているため、推測が困難です。入力値を見直してください。"
+
+    normalized_probabilities = {s: (p / total_overall_likelihood_sum) * 100 for s, p in adjusted_likelihoods.items()}
+
+    predicted_setting = max(normalized_probabilities, key=normalized_probabilities.get)
+    max_prob_value = normalized_probabilities[predicted_setting]
+
+    result_str = f"## ✨ 推測される設定: 設定{predicted_setting} (確率: 約{max_prob_value:.2f}%) ✨\n\n"
+    result_str += "--- 各設定の推測確率 ---\n"
+    for setting, prob in sorted(normalized_probabilities.items(), key=lambda item: item[1], reverse=True):
+        result_str += f"  - 設定{setting}: 約{prob:.2f}%\n"
+    
+    return result_str
+
+
+# --- Streamlit UI 部分 ---
+
+st.set_page_config(
+    page_title="ジャグラー 設定判別ツール",
+    layout="centered",
+    initial_sidebar_state="collapsed", # サイドバーはデフォルトで閉じる
+    page_icon="🎰" 
+)
+
+# カスタムCSSの注入 (背景画像なし、UI要素のスタイリングのみ残す)
 st.markdown(CUSTOM_CSS_JUGGLER, unsafe_allow_html=True)
 
 
@@ -321,39 +325,58 @@ st.markdown("---")
 st.header("▼データ入力▼")
 st.markdown("各判別要素の累計値を入力してください。")
 
-st.subheader("1. 基本データ 🎯")
-st.markdown(f"**選択機種: {selected_game_type}**") # 選択機種を表示
-with st.container(border=True):
-    total_game_count = st.number_input("総ゲーム数", min_value=0, value=0, help="総回転数を入力します。", key="total_game_count")
-    at_first_hit_count = st.number_input("ボーナス総回数", min_value=0, value=0, help="BIGとREGの合計当選回数を入力します。", key="at_first_hit_count") # at_first_hit_countをボーナス総回数に流用
-    
-    st.markdown("---")
-    st.markdown("##### ボーナス内訳")
-    col_bonus_bb, col_bonus_reg = st.columns(2)
-    with col_bonus_bb:
+st.subheader(f"1. {selected_game_type} の基本データ 🎯") # 選択機種名を表示
+st.markdown(f"選択機種の各項目に累計値を入力してください。")
+with st.container(border=True): # コンテナで囲んで視覚的にグループ化
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        total_game_count = st.number_input("総ゲーム数", min_value=0, value=0, help="総回転数を入力します。", key="total_game_count")
+        
+    with col2:
         bb_count = st.number_input("BIG回数", min_value=0, value=0, key="bb_count")
-    with col_bonus_reg:
         reg_count = st.number_input("REG回数", min_value=0, value=0, key="reg_count")
+    with col3:
+        budou_count = st.number_input("ブドウ回数", min_value=0, value=0, key="budou_count")
+        cherry_count = st.number_input("チェリー総回数", min_value=0, value=0, key="cherry_count")
     
     st.markdown("---")
-    st.markdown("##### 小役回数")
+    st.markdown("##### 💡 その他の詳細データ（集計していれば入力）")
     col_koyaku1, col_koyaku2, col_koyaku3 = st.columns(3)
     with col_koyaku1:
-        budou_count = st.number_input("ブドウ回数", min_value=0, value=0, key="budou_count")
+        st.markdown("###### チェリー重複ボーナス")
+        cherry_choufuku_bb_count = st.number_input("└ 重複BIG回数", min_value=0, value=0, key="cherry_choufuku_bb_count")
+        cherry_choufuku_rb_count = st.number_input("└ 重複REG回数", min_value=0, value=0, key="cherry_choufuku_rb_count") 
     with col_koyaku2:
-        cherry_count = st.number_input("チェリー総回数", min_value=0, value=0, key="cherry_count")
+        st.markdown("###### 単独ボーナス")
+        tandoku_bb_count = st.number_input("└ 単独BIG回数", min_value=0, value=0, key="tandoku_bb_count")
+        tandoku_rb_count = st.number_input("└ 単独REG回数", min_value=0, value=0, key="tandoku_rb_count")
     with col_koyaku3:
-        cherry_choufuku_bb_count = st.number_input("└ チェリー重複BB回数", min_value=0, value=0, key="cherry_choufuku_bb_count")
-        cherry_choufuku_rb_count = st.number_input("└ チェリー重複RB回数", min_value=0, value=0, key="cherry_choufuku_rb_rb_count") # Typo: _rb_rb_count -> _rb_count
+        # ボーナス総回数は合算で取得可能だが、念のため表示
+        st.markdown("###### ボーナス総回数")
+        st.markdown(f"<p style='font-size:1.2em; font-weight:bold;'>{bb_count + reg_count} 回</p>", unsafe_allow_html=True)
     
-    st.markdown("---")
-    st.markdown("##### 単独ボーナス回数 (集計していれば)")
-    col_tandoku_bb, col_tandoku_rb = st.columns(2)
-    with col_tandoku_bb:
-        tandoku_bb_count = st.number_input("単独BIG回数", min_value=0, value=0, key="tandoku_bb_count")
-    with col_tandoku_rb:
-        tandoku_rb_count = st.number_input("単独REG回数", min_value=0, value=0, key="tandoku_rb_count")
-    
+
+st.markdown("---")
+
+# --- 周辺状況スコアリング入力 ---
+st.header("▼周辺状況入力（設定推測の精度向上に！）▼")
+st.markdown("ホールの状況やイベント情報を入力することで、推測結果の精度を高めます。")
+st.markdown("※入力しなくても推測可能です。")
+
+with st.container(border=True):
+    col_context1, col_context2 = st.columns(2)
+    with col_context1:
+        is_event_day = st.radio("今日はイベント日ですか？", ["不明", "はい", "いいえ"], key="is_event_day_radio")
+        juggler_expect_day = st.radio("今日はジャグラーに設定が入っていることが期待できる日ですか？", ["不明", "はい", "いいえ"], key="juggler_expect_day_radio")
+        has_juggler_coverage = st.radio("ジャグラー系の取材は入っていますか？", ["不明", "はい", "いいえ"], key="has_juggler_coverage_radio")
+    with col_context2:
+        is_tail_event = st.radio("末尾イベントなどやっていますか？", ["不明", "はい", "いいえ"], key="is_tail_event_radio")
+        is_my_tail_expected = "不明"
+        if is_tail_event == "はい":
+            is_my_tail_expected = st.radio("└ 自分の座っている末尾は期待できますか？", ["不明", "はい", "いいえ"], key="is_my_tail_expected_radio")
+        else:
+            st.markdown("_(末尾イベントでないため無関係)_")
+        store_s6_history = st.radio("店がジャグラーに設定6を過去に使っている可能性は？", ["不明", "はい", "いいえ"], key="store_s6_history_radio")
 
 st.markdown("---")
 
@@ -367,16 +390,25 @@ if result_button_clicked:
     # predict_setting関数に渡す入力データを収集
     user_inputs_for_prediction = {
         'total_game_count': total_game_count,
-        'at_first_hit_count': at_first_hit_count, # ボーナス総回数
+        'at_first_hit_count': bb_count + reg_count, # ボーナス総回数をここで計算して渡す
         'bb_count': bb_count,
-        'rb_count': rb_count,
+        'reg_count': reg_count,
         'budou_count': budou_count,
         'cherry_count': cherry_count,
         'cherry_choufuku_bb_count': cherry_choufuku_bb_count,
-        'cherry_choufuku_rb_count': cherry_choufuku_rb_count, # Corrected key
+        'cherry_choufuku_rb_count': cherry_choufuku_rb_count,
         'tandoku_bb_count': tandoku_bb_count,
         'tandoku_rb_count': tandoku_rb_count,
     }
+
+    context_inputs = {
+        'is_event_day': is_event_day,
+        'juggler_expect_day': juggler_expect_day,
+        'is_tail_event': is_tail_event,
+        'is_my_tail_expected': is_my_tail_expected,
+        'has_juggler_coverage': has_juggler_coverage,
+        'store_s6_history': store_s6_history,
+    }
     
-    result_content = predict_setting(selected_game_type, user_inputs_for_prediction)
+    result_content = predict_setting(selected_game_type, user_inputs_for_prediction, context_inputs)
     st.markdown(result_content)

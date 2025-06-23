@@ -146,7 +146,6 @@ def calculate_likelihood(observed_count, total_count, target_rate_value, is_prob
     # ポアソン分布のPMF (確率質量関数) を使用して尤度を計算
     likelihood = poisson.pmf(observed_count, expected_value)
     
-    # 尤度がゼロになることを避けるため、非常に小さい値を下限とする
     return max(likelihood, 1e-10)
 
 
@@ -208,8 +207,6 @@ def apply_contextual_score(overall_likelihoods, context_inputs):
 
     return adjusted_likelihoods
 
-# --------------------------------------------------------------------------------------
-
 
 def predict_setting(game_type, data_inputs, context_inputs): # context_inputsを追加
     overall_likelihoods = {setting: 1.0 for setting in range(1, 7)} # 各設定の総合尤度を1.0で初期化
@@ -228,6 +225,7 @@ def predict_setting(game_type, data_inputs, context_inputs): # context_inputsを
     # --- 確率系の要素の計算 ---
     
     # BB, RB, ボーナス合算確率
+    # ボーナス総回数 (BIG+REG) が分母となるもの (単独BB/RB)
     at_first_hit_count = data_inputs.get('at_first_hit_count', 0) # UIからのボーナス総回数
     
     for bonus_type_key, ui_input_key in {
@@ -371,11 +369,11 @@ with st.container(border=True):
         has_juggler_coverage = st.radio("ジャグラー系の取材は入っていますか？", ["不明", "はい", "いいえ"], key="has_juggler_coverage_radio")
     with col_context2:
         is_tail_event = st.radio("末尾イベントなどやっていますか？", ["不明", "はい", "いいえ"], key="is_tail_event_radio")
-        is_my_tail_expected = "不明"
-        if is_tail_event == "はい":
+        is_my_tail_expected = "不明" # 初期値
+        if is_tail_event == "はい": # 末尾イベントが「はい」の場合のみ表示
             is_my_tail_expected = st.radio("└ 自分の座っている末尾は期待できますか？", ["不明", "はい", "いいえ"], key="is_my_tail_expected_radio")
         else:
-            st.markdown("_(末尾イベントでないため無関係)_")
+            st.markdown("_(末尾イベントでないため無関係)_") # 条件分岐で表示
         store_s6_history = st.radio("店がジャグラーに設定6を過去に使っている可能性は？", ["不明", "はい", "いいえ"], key="store_s6_history_radio")
 
 st.markdown("---")
@@ -405,7 +403,7 @@ if result_button_clicked:
         'is_event_day': is_event_day,
         'juggler_expect_day': juggler_expect_day,
         'is_tail_event': is_tail_event,
-        'is_my_tail_expected': is_my_tail_expected,
+        'is_my_tail_expected': is_my_tail_expected, # is_tail_eventが「はい」でない場合は「不明」になる
         'has_juggler_coverage': has_juggler_coverage,
         'store_s6_history': store_s6_history,
     }
